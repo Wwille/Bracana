@@ -23,6 +23,7 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 #include <U8g2lib.h>
 #include <string.h>
 #include "nvs_flash.h"  
+#include "LittleFS.h"
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -60,6 +61,8 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 ========================================================================================================================*/
 #define CHAVE_HORA   "horas"
 #define CHAVE_MIN    "minu"
+#define CHAVE_SEG    "seg"
+#define CHAVE_PONT   "point"
 
 #define Hr00 "hr00"    
 #define Hr10 "hr10"     
@@ -156,9 +159,13 @@ unsigned long     timeCallDB            = 0;
 unsigned long     timeHideDB            = 0;
 unsigned long     timeBeepCorrente      = 0;
 uint16_t          horas                 = 0;
-uint8_t           seg                   = 0; 
-uint16_t           minutos              = 0;
+uint16_t           seg                  = 0; 
+uint16_t          minutos               = 0;
 uint16_t          minAntigo             = 0;
+uint16_t          segAntigo             = 0;
+uint16_t          numPont               = 0;
+uint16_t          minGravacaoFs         = 0;
+uint16_t          numPontGravLfs        = 0;
 byte              linha                 = 0;
 byte              col                   = 0; 
 byte              confLinha             = 0; // Variável de conferência das linhas da matriz para gravação correta na memória 
@@ -173,7 +180,9 @@ byte              fRamp                 = 1;
 int               controleDisp          = 0;
 
 
-
+size_t ofSetInicial                     = 80;   // Bytes a serem mantidos na liberação de memória do arquivo.
+size_t deletLengByte                    = 104;  // Bytes a serem exluidos na liberação de memória 
+                                                // 24 Bytes tem a mensagem completa 500 pontos = 12kbytes
 uint16_t          db[8][4]{
   {0, 0, 0, 0},
   {0, 0, 0, 0},
@@ -244,10 +253,34 @@ void montaDB(uint16_t Hr, uint16_t Mn, double Im, uint Vr);    //Realiza a monta
 void banco_de_dados();                                         // Função responsável por chamara a tela e indicar os valores de tensão e corrente alterados  
 void analisaChamaScDB();                                       // Fução que monitora a chamada do banco de dados 
 void  lubrifique();                                            // Função de monitora chamada para avisar da necessidade de lubrificação da máquina.
-void reiniciaDisp(int Nt);
+void addDataToFile(int hora, int min, int segundos, int corrente, int tensao);
+void analisPreArmaz();
+void monBackupdeDados();
+void printDataToSerial();
+void analisFsArqv();
+void libMemorisFS();
+void reiniciaDisp(int nT);
 
 
 void setup(){
+
+  /*------------- INICIALIZAÇÃO DO SISTEMA DE ARQUIVOS FS ---------------*/
+    if(LittleFS.begin()){ Serial.println(F("LittleFS Inicializado.."));}
+    else{Serial.println(F("Fail to Open LittleFs Open.."));}
+
+  /* ------------------ VERIFICA A EXISTÊNCIA DO AQUIVO ---------------- */
+  if(!LittleFS.exists("/DadosBracana.txt")){
+    File dataFile = LittleFS.open("/DadosBracana.txt", "w");
+
+    if (!dataFile){Serial.println("Erro ao abrir o Arquivo");}
+    else{
+      Serial.println("Arquivo aberto com Sucesso");
+      dataFile.println("-------------- DADOS BRACANA (HORA:MIN:SEG | TENSÃO | CORRENTE) ---------------");
+    }
+    dataFile.close();
+  }
+  else{Serial.println("Arquivo LittleFS ja existe...");}
+
   uint16_t dadoLidoHora;
   uint16_t dadoLidoMin;
 
@@ -257,7 +290,7 @@ void setup(){
   ====================================================================================*/
   pinMode(fcPr1,        INPUT);
   pinMode(fcPr2,        INPUT);
- // pinMode(sinTrava,     INPUT);
+ //pinMode(sinTrava,     INPUT);
   pinMode(btLiga,       INPUT);
   pinMode(btDesliga,    INPUT);
   pinMode(btReverte,    INPUT);
@@ -280,7 +313,7 @@ void setup(){
   attachInterrupt(btEmegencia, InterrupEMERG,  RISING);
   
   //Configuração do Sensor de corrente 
-  emon1.current(CorrenteMotor,11);
+  emon1.current(CorrenteMotor,13);
 
  /*INICIALIZAÇÃO DAS PORTAS SERIAIS*/
     Serial.begin(9600); 
@@ -305,15 +338,23 @@ void setup(){
   
   //-----------------------------------  LÊ HORAS  E MINUTOS DA MEMÓRIA FLASH ------------------------------------------------------
 
-  horas  = le_dado_nvs('H'); 
+  horas     = le_dado_nvs('H'); 
   minutos   = le_dado_nvs('M');
+  seg       = le_dado_nvs('S');
+  numPont   = le_dado_nvs('P');
   minAntigo = minutos;
+  segAntigo = seg;
  // horas   = dadoLidoHora;
-  Serial.print("Dado lido de Horas - ");
-  Serial.println(horas);
- // minutos = dadoLidoMin;
-  Serial.print("Dado lido de minutos - ");
-  Serial.println(minutos);
+  Serial.print("Numero de pontos no Sistema de arquivos LittleFS: ");
+  Serial.println(numPont);
+  Serial.println();
+
+  Serial.print(horas);
+  Serial.print("H : ");
+  Serial.print(minutos);
+  Serial.print("M : ");
+  Serial.print(seg);
+  Serial.println("S ");
 
   // ----------------------------- VERIFICA CASO A MÁQUINA NECESSIDE DE LUBRIFICAÇÃO -----------------------------------------------
 
@@ -341,9 +382,10 @@ void loop() {
   }
 
   if (statuDesl || StatusEmerg){atualizaSaidaSS(buzzer,   0); }
-  
+
   atualizaLedBotoes();
   analisaChamaScDB();
+  if(Serial.available()) monBackupdeDados();
 
 // ------------------------------ VERIFICA A CONDIÇÃO PARA APRESENTAR MENSAGEM DE LUBRIFICAÇÃO NO DISPLAY -------------------------
 
@@ -354,13 +396,22 @@ void loop() {
   
 
 // APÓS DESLIGADA A MÁQUINA AGUARDA 2 SEGUNDOS E GRAVA A VARIÁVEL MINUTOS NA FLASH
- if((millis() - delayGravaEprom >= 2000) && condGravaEprom && minutos != minAntigo){
+ if((millis() - delayGravaEprom >= 2000) && condGravaEprom){
+      if(minutos != minAntigo) { 
         grava_dado_nvs(minutos, 'M'); //GRAVA HORAS NA FLASH
         minAntigo = minutos;
         condGravaEprom = false;
         Serial.println();
         Serial.print("Sucesso na gravação dos Minutos");
-  } //Grava conteúdo dos minutos 
+      }
+      if( seg != segAntigo) { 
+        grava_dado_nvs(seg, 'S'); //GRAVA HORAS NA FLASH
+        segAntigo = seg;
+        condGravaEprom = false;
+        Serial.println();
+        Serial.print("Sucesso na gravação dos Segundos");
+      }
+  } //Grava conteúdo dos minutos e Segundos gravados  
 
 //----------- VERIFICA SE O BOTÃO LIGA OU REVERTE FORAM PRESSIONADOS PARA FICAR CHAMANDO AS TELAS CORRETAMENTE----------------
   if(StatusLiga && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca) draw(5);
@@ -430,8 +481,8 @@ void loop() {
       timeBeepCorrente = millis();
     }
 
-    //APÓS 20 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
-    if(millis() - tempSobCorrent > 20000){
+    //APÓS 3 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
+    if(millis() - tempSobCorrent > 3000){
       I_altaDetectada = false;
       contSobreCorre = 0;
 
@@ -465,7 +516,7 @@ void loop() {
     }
 
     //APÓS 20 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
-    if(millis() - tempSobCorrent > 20000){
+    if(millis() - tempSobCorrent > 2000){
       I_muitoAltaDetectada = false;
       contExtSobreCorre = 0;
       if(StatusLiga) draw(5);
@@ -473,12 +524,11 @@ void loop() {
     }
   }
 //------------------------------------------------------------------------------------------------------------------------------
-//------------------------------------------------------------------------------------------------------------------------------
-// ------------ DETECÇÃO DE TENSÃO BAIXA E TENSAÃO MUITO BAIXA E CHAMADA CORRETA DAS TELAS, MENSAGEM PERMANECE POS 20S----------
+// ------------ DETECÇÃO DE TENSÃO BAIXA E TENSAÃO MUITO BAIXA E CHAMADA CORRETA DAS TELAS, MENSAGEM PERMANECE POS 2S----------
 //------------------------------------------------------------------------------------------------------------------------------
   if(V_extBaixaDetectada && !habCallDB && !StatusEmerg && !habCallDB && !statusSR1 && !statusST){
     draw(8);
-    if(millis() - tempSubtensao > 20000){
+    if(millis() - tempSubtensao > 2000){
       V_extBaixaDetectada = false;
       contSubTensaoExtrema = 0;
       if(StatusLiga) draw(5);
@@ -488,7 +538,7 @@ void loop() {
   
   else if(V_baixaDetectada && !habCallDB && !StatusEmerg && !habCallDB && !statusSR1 && !statusST){
     draw(7);
-    if(millis() - tempSubtensao > 20000){
+    if(millis() - tempSubtensao > 2000){
       V_baixaDetectada = false;
       contSubTensao = 0;
       if(StatusLiga) draw(5);
@@ -496,6 +546,9 @@ void loop() {
     }
   }
 
+//------------------------------------------------------------------------------------------------------------------------------
+//                                  ------------ SISTEMA DE PARTIDA DO MOTOR  ----------
+//------------------------------------------------------------------------------------------------------------------------------
   if((StatusLiga || StatusRevert) && (millis() - finalRamp >= 600) && fRamp == 0){
     atualizaSaidaSS(triac,   1); 
     if (millis() - finalRamp >= 1000)
@@ -581,7 +634,13 @@ void statusSensores(){
 ====================================================================================*/
 void calculaCorrente(){
  //DESCOMENTAR AS DUAS PRÓXIMAS LINHAS PARA A LEITURA PARA A LEITURA CORRETA DA CORRENTE COM O SENSOR NÃO INVASIVO 
-  //Irms = 13;
+  /* --------   SIMULAÇÃO DE PARA TESTES CORRENTE ALTA -------------*/
+  /*if(seg >5 && seg <15)Irms = 15;
+  else if (seg >= 15 && seg < 25)Irms = 8;
+  else if (seg >= 25 && seg < 35)Irms = 15;
+  else Irms = 8;*/
+  
+  //Irms = 8;
   Irms = emon1.calcIrms(1480);        // Configura número de amostras para a corrente 
   Serial.println(Irms );
   if(Irms < 1) Irms = Irms*0;         // Caso a corrente for menor que 1A desconsidera a corrente drenada 
@@ -617,8 +676,17 @@ void calculaTensaoRede(){
     Serial.println(mediaTensao);
     Serial.println();*/
 
-    tensaoDaRede = (226 * mediaTensao) / 4096;
-    //tensaoDaRede = (265 * mediaTensao) / 4096;Moenda Protótipo
+    tensaoDaRede = (226 * mediaTensao) / 4096;    // Primeiros 3 Protótipos
+    //tensaoDaRede = (265 * mediaTensao) / 4096;    //Moenda Protótipo
+
+    /*-------------  SIMULAÇÃO PARA TESTES DE BAIXA TENSÃO -------------*/
+    /*if(seg >5 && seg <20)tensaoDaRede = 208;
+     else if (seg >= 20 && seg < 35)tensaoDaRede = 221;
+     else if (seg >= 35 && seg < 50)tensaoDaRede = 208;
+     else tensaoDaRede = 221;
+     Serial.print("Tensão Rede :");
+     Serial.println(tensaoDaRede);*/
+
 
     /*Serial.print("TENSÃO CONVERTIDA - ");
     Serial.println(tensaoDaRede);
@@ -653,7 +721,8 @@ void analisaTensaoRede(){
     if(contSubTensao >= 5 && !V_baixaDetectada && StatusLiga){
       //Armazenar no banco de cados 
       V_baixaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede);
+      analisPreArmaz();
+//    montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSubtensao = millis();
     }
   }
@@ -663,10 +732,11 @@ void analisaTensaoRede(){
   if(!nivelTensao && tensaoDaRede <= 203){
     contSubTensaoExtrema++;
 
-    if(contSubTensaoExtrema >= 3 && !V_extBaixaDetectada  && StatusLiga){  // 
+    if(contSubTensaoExtrema >= 5 && !V_extBaixaDetectada  && StatusLiga){  // 
       //Armazenar no banco de cados 
       V_extBaixaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede);
+      analisPreArmaz();
+   //   montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSubtensao = millis();
     }
   }
@@ -681,7 +751,8 @@ void analisaTensaoRede(){
     if(contSubTensao >= 5 && !V_baixaDetectada  && StatusLiga){
       //Armazenar no banco de cados 
       V_baixaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
+      analisPreArmaz();
+ //   montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
       tempSubtensao = millis();
     }
   }
@@ -692,10 +763,12 @@ void analisaTensaoRede(){
   if(nivelTensao && tensaoDaRede+12 <= 116 ){
     contSubTensaoExtrema++;
 
-    if(contSubTensaoExtrema >= 3 && !V_extBaixaDetectada  && StatusLiga){  // 
+    if(contSubTensaoExtrema >= 5 && !V_extBaixaDetectada  && StatusLiga){  // 
       //Armazenar no banco de cados 
       V_extBaixaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
+      analisPreArmaz();
+
+     // montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
       tempSubtensao = millis();
     }
   }
@@ -713,10 +786,11 @@ void analizeCorrenteMotor(){
     Serial.println(contSobreCorre);
   
 
-    if(contSobreCorre >= 2 && !I_altaDetectada){
+    if(contSobreCorre >= 5 && !I_altaDetectada){
       //Armazenar no banco de cados 
       I_altaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede);
+      analisPreArmaz();
+      //montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSobCorrent = millis();
       if (!habBeep)
       {
@@ -725,21 +799,31 @@ void analizeCorrenteMotor(){
       }
     }
   }
-  if(!nivelTensao && Irms <= 12) contSobreCorre = 0; habBeep = false;
+  if(!nivelTensao && Irms <= 12) {
+    contSobreCorre = 0; 
+    habBeep = false;
+    auxCont = 0;
+  }
 
   // VERIFICA CORRENTE MUITO ALTA PARA TENSÃO DE TRABALHO DE 220V
   if(!nivelTensao && Irms >= 14){
     contExtSobreCorre++;
 
-    if(contExtSobreCorre >= 2 && !I_muitoAltaDetectada){
+    if(contExtSobreCorre >= 5 && !I_muitoAltaDetectada){
       //Armazenar no banco de cados 
       I_muitoAltaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede);
+      analisPreArmaz();
+     
+ //     montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSobCorrent = millis();
       timeBeepCorrente = millis();
     }
   }
-  if(!nivelTensao && Irms < 14) contExtSobreCorre = 0;
+  if(!nivelTensao && Irms < 14) {
+   contExtSobreCorre = 0;
+   habBeep = false;
+   auxCont = 0;
+  }
 
   //------------------------------------------------------------------------------------------
  
@@ -747,30 +831,41 @@ void analizeCorrenteMotor(){
   if(nivelTensao && Irms > 25.5 && Irms < 27){
     contSobreCorre++;
 
-    if(contSobreCorre >= 2 && !I_altaDetectada){
+    if(contSobreCorre >= 5 && !I_altaDetectada){
       //Armazenar no banco de cados 
       I_altaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede);
+      analisPreArmaz();
+    
+    // montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSobCorrent = millis();
       timeBeepCorrente = millis();
     }
   }
-  if(nivelTensao && Irms <= 24) contSobreCorre = 0;
-
+  if(nivelTensao && Irms <= 24) {
+    contSobreCorre = 0;
+    habBeep = false;
+    auxCont = 0;
+  }
   // VERIFICA CORRENTE MUITO ALTA PARA TENSÃO DE TRABALHO DE 127V
   if(nivelTensao && Irms >= 27){
     contExtSobreCorre++;
    // Serial.println(contExtSobreCorre);
 
-    if(contExtSobreCorre >= 2 && !I_muitoAltaDetectada){
+    if(contExtSobreCorre >= 5 && !I_muitoAltaDetectada){
       //Armazenar no banco de cados 
       I_muitoAltaDetectada = true;
-      montaDB(horas, minutos, Irms*10, tensaoDaRede);
+      analisPreArmaz();
+
+    //montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSobCorrent = millis();
       timeBeepCorrente = millis();
     }
   }
-  if(nivelTensao && Irms < 25.5) contSobreCorre = 0;
+  if(nivelTensao && Irms < 25.5) {
+    contSobreCorre = 0;
+    habBeep = false;
+    auxCont = 0;
+  }
 }
 
 /*=====================================================================================
@@ -1153,14 +1248,14 @@ void atualizaHorimetro(){
     Serial.print("Segundos = ");
     Serial.println(seg);
 //-----CONTAGEM DOS MINUTOS ----------
-    if(seg == 60){
+    if(seg == 59){
       minutos++;
       Serial.print("Minutos =");
       Serial.println(minutos);
       seg = 0;
     }
 //-----CONTAGEM DAS HORAS----------
-    if(minutos == 60){
+    if(minutos == 59){
       horas++;
       Serial.print("Horas =");
       Serial.println(horas);
@@ -1337,6 +1432,16 @@ void grava_dado_nvs(uint16_t dado, char leitura){
       Serial.println("MINUTOS GRAVADOS");
       break;
 
+    case 'S': //REALIZA A GRAVAÇÃO DOS MINUTOS 
+      err = nvs_set_u16(handler_particao_nvs, CHAVE_SEG, dado);
+      Serial.println("SEGUNDOS GRAVADOS");
+      break;
+
+    case 'P': //REALIZA A GRAVAÇÃO DOS MINUTOS 
+      err = nvs_set_u16(handler_particao_nvs, CHAVE_PONT, dado);
+      Serial.println("NUMERO DE PONTOS GRAVADOS");
+      break;
+
     case 'A': //GRAVA NA FLASH A HORA MÁQUINA QUE OCORREU O ALARME 
       if(linha == 0)      err =  nvs_set_u16(handler_particao_nvs, Hr00, dado);
       else if(linha == 1) err =  nvs_set_u16(handler_particao_nvs, Hr10, dado);
@@ -1489,6 +1594,16 @@ uint16_t le_dado_nvs(char leitura)
  case 'M': //FAZ A LEITURA DOS MINUTOS 
     err = nvs_get_u16(handler_particao_nvs, CHAVE_MIN, &dado_lido);
     Serial.println("Leu os dados de MINUTOS ");
+  break;
+
+case 'S': //FAZ A LEITURA DOS MINUTOS 
+    err = nvs_get_u16(handler_particao_nvs, CHAVE_SEG, &dado_lido);
+    Serial.println("Leu os dados de SEGUNDOS ");
+  break;
+
+case 'P': //FAZ A LEITURA DOS MINUTOS 
+    err = nvs_get_u16(handler_particao_nvs, CHAVE_PONT, &dado_lido);
+    Serial.println("Leu os dados de PONTOS gravados noa arquino LittleFS");
   break;
 
  case 'A': //RECUPERA AS HORAS PARA A MATRIZ DO BANCO DE DADOS 
@@ -1809,7 +1924,7 @@ void IRAM_ATTR InterrupLIGA(){
       condGravaEprom  =   false;
       horimetro       =   millis();
       Serial.println("LIGA");
-      delay(10);
+//      delay(10);
     }
     else   StatusLiga = false;
     
@@ -1831,6 +1946,7 @@ void IRAM_ATTR InterrupDESL(){
   if(!StGravaFlah){
     if(habCallDB) timeHideDB = millis();
     Serial.println("DESL.");
+//    delay(10);
     
     if(StatusLiga || StatusRevert) {
       V_baixaDetectada = false;
@@ -1845,7 +1961,8 @@ void IRAM_ATTR InterrupDESL(){
 
       if(confLinha < linha && !StGravaFlah){
         grava_dado_nvs(linha , 'L');
-      }     
+      } 
+      atualizaSaidaSS(buzzer,   0);    
     }
     //else condGravaEprom = false;
     timeCallDB = millis();
@@ -1854,6 +1971,7 @@ void IRAM_ATTR InterrupDESL(){
     statuDesl       =   true; 
     auxCont = 0;
     sTBeeb  = 0;
+    minGravacaoFs = 0;
 
     atualizaSaidaSS(byPass,   0);
     atualizaSaidaSS(hora,     0);
@@ -1874,6 +1992,7 @@ void IRAM_ATTR InterrupREVERT(){
       condGravaEprom  =   false;
       horimetro       =   millis();
       Serial.println("REVERT");
+//      delay(10);
     }
     else StatusRevert = false;
 
@@ -1899,21 +2018,219 @@ void IRAM_ATTR InterrupEMERG(){
   habCallDB         = false; 
   statuDesl         =  true;
   fRamp = 1;
-  
+  minGravacaoFs = 0;
+
   V_baixaDetectada = false;
   V_extBaixaDetectada = false;
   I_altaDetectada = false;
   I_muitoAltaDetectada = false;   
   auxCont = 0;
   sTBeeb  = 0;
-   
 
   atualizaSaidaSS(byPass,   false);
   atualizaSaidaSS(hora,     false);
   atualizaSaidaSS(antHor,   false);
   atualizaSaidaSS(triac,    false);
-  atualizaSaidaSS(buzzer,   false);
 }
+
+
+/*==================================================================================
+----------------- FUNÇÃO DE GRAVAÇÃO DE DADOS NO ARQUIVO LITTLEFS  -----------------  
+====================================================================================*/
+void addDataToFile(int hora, int min, int segundos, int corrente, int tensao){
+    File dataFile = LittleFS.open("/DadosBracana.txt", "a");
+
+        if (dataFile)
+        {   
+            Serial.println("Dado adicionado ao Arquivo");
+            if (hora < 10) {
+              dataFile.print("0");
+              dataFile.print(hora);
+            } else{dataFile.print(hora);}
+
+            dataFile.print(":");
+
+            if (min < 10) {
+              dataFile.print("0");
+              dataFile.print(min);
+            }else{dataFile.print(min);}
+            
+            dataFile.print(":");
+
+            if(segundos < 10){
+              dataFile.print("0");
+              dataFile.print(segundos);
+            }else{dataFile.print(segundos);}
+
+            dataFile.printf("- - -");
+            dataFile.print(tensao);
+            dataFile.printf(" - ");
+            dataFile.println(corrente);
+ //         delay(5);
+            dataFile.close();
+        }else{
+            Serial.println("Erro ao Abrir o Arquivo");
+        }
+}
+
+/*==================================================================================
+----------------- PRÉ ANALISE PARA ARMAZENAMENTO DOS DADOS NO -----------------
+                              ARQUIVO LITTLE FS    
+====================================================================================*/
+void analisPreArmaz(){
+  int difMin = minutos - minGravacaoFs;
+    if((sqrt((difMin*difMin))) >= 2)
+     {
+       addDataToFile(horas, minutos, seg, Irms*10, tensaoDaRede);
+       numPont++;
+       grava_dado_nvs(numPont,'P');
+       montaDB(horas, minutos, Irms*10, tensaoDaRede);
+       if (numPont >= 1000) {
+        analisFsArqv();
+        libMemorisFS();
+        numPont = numPont/2;
+        grava_dado_nvs(numPont, 'P');
+       }
+       minGravacaoFs = minutos;
+     }
+}
+
+
+/*==================================================================================
+------- FUNÇAO DE BACKUP DOS DADOS OU FORMATAÇÃO/ CRIAÇÃO DO ARQUIVO   ------------  
+====================================================================================*/
+void monBackupdeDados(){
+  int comand = Serial.read();
+  if (comand == 82 || comand == 114)  {printDataToSerial(); } //Se comando "R" ou "r" (Faz a leirura)
+
+  else if (comand == 70 || comand == 102)                     //Se comando "F" ou "f" (Formata e cria novamente o arquivo caso não exista)
+  {
+    LittleFS.format();
+    Serial.println("Arquivo Formatado..");
+
+    //Verifica se o arquico especificado ja Existe, se não existe cria
+    if(!LittleFS.exists("/DadosBracana.txt")){
+      File dataFile = LittleFS.open("/DadosBracana.txt","w");
+      if(!dataFile){
+        Serial.print("Erro ao abrir o arquivo..");
+      }else{
+        Serial.println("Arquivo aberto com sucesso.");
+        dataFile.println("-------------- DADOS BRACANA (HORA:MIN:SEG | TENSÃO | CORRENTE) ---------------");
+      }
+      dataFile.close();
+    }else{
+      Serial.println("Arquico exixtente..");
+    }
+    numPont = 0;
+    grava_dado_nvs(numPont, 'P');
+  }
+  else if(comand == 0x64 || comand == 0x44){ //Se comando "D" ou "d" (Mostra análises de memória livre e usada no sistema de arquivo)
+    analisFsArqv();
+  }
+  else if (comand == 0x4C || comand == 0x6C){ //Se comando "L" ou "l" (Libera memória do sistema de arquivos LittleFS)
+    numPont = numPont - 1;
+    grava_dado_nvs(numPont, 'P');
+    libMemorisFS();
+  }
+  else{
+    Serial.println("Comando Inválido");
+  }
+}
+
+/*==================================================================================
+------- FUNÇAO QUE IMPRIME TODOS OS DADOS NA SERIAL QUANDO SOLICITADO   ------------  
+====================================================================================*/
+void printDataToSerial(){
+  File dataFile = LittleFS.open("/DadosBracana.txt","r");
+   if (dataFile)
+    {
+        Serial.println("Arquivo aberto para leitura com Sucesso!!!");
+        while (dataFile.available())
+        {
+            Serial.write(dataFile.read());
+        }
+            dataFile.close();
+    } else{
+      Serial.println("Erro ao ler Arquivo..");
+    }
+}
+
+/*==================================================================================
+------------- FUNÇAO  DE ANÁLISE DE MEMÓRIA LIVRE/USADA NO SISTEMA ----------------  
+                            DE ARQUIVOS LITTLE FS  
+====================================================================================*/
+void analisFsArqv(){
+  // Calcula o espaço ocupado pelos arquivos existentes
+  size_t usedBytes = 0;
+
+  File root = LittleFS.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    usedBytes += file.size();
+    file = root.openNextFile();
+  }
+  root.close();
+  deletLengByte = (usedBytes - 80)/2; //Bytes a serem deletados são os (bytes usados - bites do título)/2 (metade do arquivo de dados) 
+
+  size_t totalBytes = LittleFS.totalBytes();
+  size_t freeBytes = totalBytes - usedBytes;
+
+  Serial.print("Tamanho total do sistema de arquivos: ");
+  Serial.println(totalBytes);
+  Serial.print("Bytes usados: ");
+  Serial.println(usedBytes);
+  Serial.print("Espaço livre: ");
+  Serial.println(freeBytes);
+  Serial.println();
+  Serial.print("Numero de pontos no Arquivo: ");
+  Serial.println(numPont);
+}
+
+/*==================================================================================
+------------- FUNÇAO  DE LIBERAÇÃO DE MEMÓRIA DO ARQUIVO LITTLE FS  ---------------  
+====================================================================================*/
+void libMemorisFS(){
+   // Abre o arquivo original em modo de leitura
+    File originalFile = LittleFS.open("/DadosBracana.txt", "r");
+    if (!originalFile) {
+      Serial.println("Falha ao abrir o arquivo ORIGINAL");
+      return;
+    }
+
+    // Abre o novo arquivo em modo de escrita
+    File newFile = LittleFS.open("/meuArquivoNovo.txt", "w");
+    if (!newFile) {
+      Serial.println("Falha ao criar o novo arquivo NOVO");
+      originalFile.close();
+      return;
+    }
+    
+    // Copia os dados iniciais que deseja manter para o novo arquivo
+    for (size_t i = 0; i < ofSetInicial; i++) {
+      newFile.write(originalFile.read());
+    }
+
+    // Pula os dados que você deseja excluir
+    originalFile.seek(deletLengByte, SeekSet);
+
+    // Copia o restante do arquivo original para o novo arquivo
+    while (originalFile.available()) {
+      newFile.write(originalFile.read());
+    }
+
+    originalFile.close();
+    newFile.close();
+
+    // Remove o arquivo original
+    LittleFS.remove("/DadosBracana.txt");
+
+    //Renomeia o novo arquivo com nome original 
+    LittleFS.rename("/meuArquivoNovo.txt", "/DadosBracana.txt");
+
+    Serial.println("Exclusão parcial de dados concluída com sucesso!");
+}
+
+
 
 /*==================================================================================
                         FUNÇÃO DE REINICIALIZAÇÃO DO DISPLAY    
@@ -1922,8 +2239,6 @@ void reiniciaDisp(int nT){
  if(controleDisp != nT){
     u8g2.beginSimple();
     controleDisp = nT;
-//    Serial.println("REINICIALIZAÇÃO DISPLAY");
+   // Serial.println("REINICIALIZAÇÃO DISPLAY");
   }
 }
-
-
