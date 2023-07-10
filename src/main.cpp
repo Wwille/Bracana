@@ -676,8 +676,8 @@ void calculaTensaoRede(){
     Serial.println(mediaTensao);
     Serial.println();*/
 
-    tensaoDaRede = (226 * mediaTensao) / 4096;    // Primeiros 3 Protótipos
-    //tensaoDaRede = (265 * mediaTensao) / 4096;    //Moenda Protótipo
+    //tensaoDaRede = (226 * mediaTensao) / 4096;    // Primeiros 3 Protótipos
+    tensaoDaRede = (265 * mediaTensao) / 4096;    //Moenda Protótipo
 
     /*-------------  SIMULAÇÃO PARA TESTES DE BAIXA TENSÃO -------------*/
     /*if(seg >5 && seg <20)tensaoDaRede = 208;
