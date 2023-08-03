@@ -246,7 +246,7 @@ void alerta_Vmuitobaixa();                    //Função de chamada da tela que 
 void analizeCorrenteMotor();                  //Função de verifica se a corrente do motor esta "Alta" ou "Muito Alta" baseandose na tensão onde onde o motro foi instalado
 void alerta_Ialta();                         //Função de chama a tela do display, alertando da "corrente alta" 
 void alertaImuitoalta();                      //Função de chama a tela do display, alertando da "corrente muito alta" 
-void contagemHoras(uint16_t horaFuc);         //Função de configura as horas na tela dos display incrementando o espaço da esquerda do display
+void contagemHoras(uint16_t horaFuc, uint16_t minut);         //Função de configura as horas na tela dos display incrementando o espaço da esquerda do display
 void grava_dado_nvs(uint16_t dado,  char leitura); //Função responsável pela gravação na memória Flash do ESP
 uint16_t le_dado_nvs(char leitura);                            //Função responsável por realizar a leitura do dado da memória flash do ESP 
 void montaDB(uint16_t Hr, uint16_t Mn, double Im, uint Vr);    //Realiza a montagem do banco de dados quando detecta tensão baixa ou corrente alta   
@@ -907,41 +907,35 @@ void atualizaLedBotoes(){
                 FUNÇÃO DE CONSTRUÇÃO DA TELA FIXA  
 ====================================================================================*/
 void  telafixa(boolean SR1, boolean ST, boolean EM) {
-
   u8g2.setFont(u8g2_font_timR08_tr);
   u8g2.drawLine(34, 0, 34, 100);
   u8g2.drawLine(34, 25, 200, 25);
-  u8g2.drawStr(23, 1, "h"); //TÍTULO HORÍMETRO
+  u8g2.drawStr(25, 1, "h"); //TÍTULO HORÍMETRO
   u8g2.setFont(u8g2_font_timR08_tr);
-  u8g2.drawStr(1, 14, "SR"); //TÍTULO SENSOR ROLO 1
- // u8g2.setFont(u8g2_font_timR08_tr);
- // u8g2.drawStr(1, 25, "SR2"); //TÍTULO SENSOR ROLO 2
+  u8g2.drawStr(14, 11, "min");
   u8g2.setFont(u8g2_font_timR08_tr);
-  u8g2.drawStr(1, 32, "ST"); //TÍTULO SENSOR TRANSMISSÃO 2
+  u8g2.drawStr(1, 24, "SR"); //TÍTULO SENSOR ROLO 1 (14)
   u8g2.setFont(u8g2_font_timR08_tr);
-  u8g2.drawStr(1, 50, "EM"); //TÍTULO SENSOR TRANSMISSÃO 2
+  u8g2.drawStr(1, 38, "ST"); //TÍTULO SENSOR TRANSMISSÃO 2(32)
+  u8g2.setFont(u8g2_font_timR08_tr);
+  u8g2.drawStr(1, 52, "EM"); //TÍTULO SENSOR TRANSMISSÃO 2 (50)
 
   //////////////INDICAÇÃO DOS SENSORES E EMERGÊNCIA////////////////
-if (SR1 == 0)  // VERIFICA O ESTADO DO SENSOR ROLO 1
-u8g2.drawCircle(27,18,4);
-else
-u8g2.drawDisc(27,18,4);
+  if (SR1 == 0)  // VERIFICA O ESTADO DO SENSOR ROLO 1
+    u8g2.drawCircle(27,28,4); //(27,18,4)
+  else
+    u8g2.drawDisc(27,28,4);//(27,18,4)
 
-/*if (SR2 == 0)   // VERIFICA O ESTADO DO SENSOR ROLO 2
-u8g2.drawCircle(27,29,4);
-else
-u8g2.drawDisc(27,29,4);*/
+  if (ST == 0)   // VERIFICA O ESTADO DO SENSOR DE TRANSMISSÃO
+    u8g2.drawCircle(27,42,4); //(27,36,4)
+  else
+    u8g2.drawDisc(27,42,4);//(27,36,4)
 
-if (ST == 0)   // VERIFICA O ESTADO DO SENSOR DE TRANSMISSÃO
-u8g2.drawCircle(27,36,4);
-else
-u8g2.drawDisc(27,36,4);
-
-if (EM == 0)    // VERIFICA O ESTADO DO BOTÃO DE EMERGÊNCIA
-u8g2.drawCircle(27,54,4);
-else
-u8g2.drawDisc(27,54,4);
-  }
+  if (EM == 0)    // VERIFICA O ESTADO DO BOTÃO DE EMERGÊNCIA
+    u8g2.drawCircle(27,56,4); //(27,54,4)
+  else
+    u8g2.drawDisc(27,56,4);//(27,54,4)
+}
 
 
 /*==================================================================================
@@ -1031,68 +1025,68 @@ void draw(int tela){
 
       case 1: //Apresenta a tela fixa
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         aguardandooperacao();
         reiniciaDisp(tela);
         break;
 
       case 2: //Apresenta as informações em relação a falta de sinal em um dos sensores de proteção dos rolos 
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         prot_rolos(!statusSR1);
         break;
 
       case 3: //Apresenta as informações em relação a falta de sinal do sensor de protação das transmissões 
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         prot_transmissao(statusST);
         break;
 
       case 4: //Apresenta as informações caso o botão de emergência tenha sido acionado 
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         emergencia(StatusEmerg);
         controleDisp = tela;
         break;
 
       case 5: //Apresenta tela da máquina em operação "LIGADA"
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         emOperacaoLigada();
         controleDisp = tela;
         break;
 
       case 6: //Apresenta a tela da máquina em operação "REVERSÂO"
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         emOperacaoReversa();
         controleDisp = tela;
         break;
 
       case 7: //Apresenta a tela de alerta de tensão "BAIXA" 
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         alerta_Vbaixa();
         controleDisp = tela;
         break;
 
       case 8: //Apresenta a tela de alerta de tensão "MUITO BAIXA"
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         alerta_Vmuitobaixa();
         controleDisp = tela;
         break;
 
       case 9: // Apresenta a tela de corrente "ALTA"
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         alerta_Ialta();
         controleDisp = tela;
         break;
 
       case 10: // Apresenta a tela de "CORRENTE MUITO ALTA"
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         alertaImuitoalta();
         controleDisp = tela;
         break;
@@ -1103,7 +1097,7 @@ void draw(int tela){
 
       case 12: // Apresenta a tela puxando o banco de dados da Flash do microcontrolador
         telafixa(!statusSR1, !statusST, !StatusEmerg);
-        contagemHoras(horas);
+        contagemHoras(horas, minutos);
         lubrifique();
         break;
 
@@ -1248,14 +1242,14 @@ void atualizaHorimetro(){
     Serial.print("Segundos = ");
     Serial.println(seg);
 //-----CONTAGEM DOS MINUTOS ----------
-    if(seg == 59){
+    if(seg == 60){
       minutos++;
       Serial.print("Minutos =");
       Serial.println(minutos);
       seg = 0;
     }
 //-----CONTAGEM DAS HORAS----------
-    if(minutos == 59){
+    if(minutos == 60){
       horas++;
       Serial.print("Horas =");
       Serial.println(horas);
@@ -1269,17 +1263,40 @@ void atualizaHorimetro(){
 /*==================================================================================
               FUNÇÃO QUE REALIZA A ATUALIZAÇÃO DAS HORAS NO DISPLAY  
 ====================================================================================*/
-void contagemHoras(uint16_t horaFuc){
+void contagemHoras(uint16_t horaFuc, uint16_t minut){
   char h[5] = "";
+  char m[5] = "";
     sprintf(h, "%d", horaFuc); 
-    if (horaFuc <= 9)
-    u8g2.drawStr(15,1,h);
-    if(horaFuc > 9 && horaFuc <= 99) 
-    u8g2.drawStr(10,1,h);
-    if(horaFuc > 99 && horaFuc <= 999) 
-    u8g2.drawStr(5,1,h);
+    if (horaFuc <= 9){
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(17,1,h);
+      u8g2.setFont(u8g2_font_timR08_tr); //u8g2_font_blipfest_07_tr
+      u8g2.drawStr(2, 1, "000");
+    }
+    if(horaFuc > 9 && horaFuc <= 99){
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(12,1,h);
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(2, 1, "00");
+    }
+    if(horaFuc > 99 && horaFuc <= 999){ 
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(7,1,h);
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(2, 1, "0");
+    }
     if(horaFuc > 999) 
-    u8g2.drawStr(0,1,h);
+    u8g2.drawStr(2,1,h);
+
+    sprintf(m, "%d",minut);
+    if (minut <= 9){
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(7,11,m);
+      u8g2.setFont(u8g2_font_timR08_tr);
+      u8g2.drawStr(2, 11, "0");
+    }
+    if(minut > 9 ) 
+    u8g2.drawStr(2,11,m);
 }
 
 /*==================================================================================
