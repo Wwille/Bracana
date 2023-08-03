@@ -591,7 +591,7 @@ void statusSensores(){
     draw(4);
   }
 
-  else if (statusSR1) {
+  else if (statusSR1 && !habCallDB) {
     statusSeguranca  = false;
     StatusLiga = false;
     StatusRevert = false;
@@ -603,7 +603,7 @@ void statusSensores(){
     draw(2);
   }
 
-  else if (statusST) {
+  else if (statusST && !habCallDB) {
     statusSeguranca  = false;
     StatusLiga = false;
     StatusRevert = false;
