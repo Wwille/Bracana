@@ -56,6 +56,8 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 
 #define TEMP_LUBRIFICA           800 //Tempo para librificação da máquina em horas 
 
+#define WATCHDOG_TIMEOUT 2000 // Alterado para 3 segundos
+
 /*======================================================================================================================
                             DEFINIÇÃO DAS CHAVES DE GRAVAÇÃO DE HORA E MINUTO 
 ========================================================================================================================*/
@@ -139,7 +141,7 @@ uint8_t           pisca                 = 0;
 uint8_t           sobrecorrente         = 0;
 uint8_t           sobretensao           = 0;
 uint8_t           subtensao             = 0;
-uint8_t           tempTurnOff           = 15;           //Tempo em segundos, para desligar o Motor caso a corrente não baixe 
+uint8_t           tempTurnOff           = 10;           //Tempo em segundos, para desligar o Motor caso a corrente não baixe 
 unsigned long     tempoinicializacao    = millis(); 
 uint8_t           tempologo             = 0;
 uint8_t           tempomuda             = 0;
@@ -178,6 +180,7 @@ unsigned long     timeMsgLubrif         = 0;
 unsigned long     finalRamp             = 0;
 byte              fRamp                 = 1;
 int               controleDisp          = 0;
+unsigned long     reabOp                = 0;
 
 
 size_t ofSetInicial                     = 80;   // Bytes a serem mantidos na liberação de memória do arquivo.
@@ -215,6 +218,7 @@ uint16_t          db[8][4]{
  boolean sTBeeb               =   false;
  boolean habBeep              =   false;
 
+
 /*==================================================================================
                                 ESCOPO DAS FUNÇÕES 
 ====================================================================================*/
@@ -223,6 +227,8 @@ void IRAM_ATTR InterrupLIGA();                //Função responsável por tratar
 void IRAM_ATTR InterrupDESL();                //Função responsável por tratar as interrupções externas 
 void IRAM_ATTR InterrupREVERT();              //Função responsável por tratar as interrupções externas 
 void IRAM_ATTR InterrupEMERG();               //Função responsável por tratar as interrupções externas 
+void IRAM_ATTR resetModule();
+
 void statusSensores();                        //Funçaõ responsável por verificar o estatus dos sensores da moenda 
 void atualizaSaidaSS(int posicao, int i);     //Função de atualização das saídas do ShiftSelect
 void calculaTensaoRede();                     //Função que realiza o cáculo da tensão da rede 
@@ -260,8 +266,10 @@ void printDataToSerial();
 void analisFsArqv();
 void libMemorisFS();
 void reiniciaDisp(int nT);
+void turnOffHHCurrent();
 
 
+hw_timer_t *timer = NULL;
 void setup(){
 
   /*------------- INICIALIZAÇÃO DO SISTEMA DE ARQUIVOS FS ---------------*/
@@ -284,7 +292,7 @@ void setup(){
   uint16_t dadoLidoHora;
   uint16_t dadoLidoMin;
 
-  u8g2.begin();
+  
   /*==================================================================================
                             DEFINIÇÃO DE ENTRADAS DIGITAIS   
   ====================================================================================*/
@@ -370,9 +378,31 @@ void setup(){
   else if (horas >= 2 && contLub == 1 )                                          {habLunbrificacao = true; contLub = 0; timeMsgLubrif = millis();}
 
   if(digitalRead(btEmegencia)) StatusEmerg = true;
+
+  // CONFIGURAÇÃO DO TIMER DO WATCHDOG PARA A REENICIALIZAÇÃO EM CASO DE TRAVAMENTO 
+   //hw_timer_t * timerBegin(uint8_t num, uint16_t divider, bool countUp)
+    /*
+       num: é a ordem do temporizador. Podemos ter quatro temporizadores, então a ordem pode ser [0,1,2,3].
+      divider: É um prescaler (reduz a frequencia por fator). Para fazer um agendador de um segundo, 
+      usaremos o divider como 80 (clock principal do ESP32 é 80MHz). Cada instante será T = 1/(80) = 1us
+      countUp: True o contador será progressivo
+    */
+    timer = timerBegin(0, 80, true); //timerID 0, div 80
+    //timer, callback, interrupção de borda
+    timerAttachInterrupt(timer, &resetModule, true);
+    //timer, tempo (us), repetição
+    timerAlarmWrite(timer, 2000000, true);
+    timerAlarmEnable(timer); //habilita a interrupção 
+
+    reabOp = millis();
+
+    delay(100);
+    u8g2.begin();
+    delay(100);
 } 
 
 void loop() {
+  timerWrite(timer, 0);
   tempoparainicializacao();
   tempomensagensdealerta();
   if(tempoinicializacao < 8000)  draw(0);
@@ -381,6 +411,12 @@ void loop() {
    statusSensores();
   }
 
+// --------------- TRATA ERRO DE ESCRITA NO DISPLAY -------------------
+  if(u8g2.getWriteError()){
+    Serial.print("Erro Escrita LCD");
+    u8g2.beginSimple();
+  }
+  
   if (statuDesl || StatusEmerg){atualizaSaidaSS(buzzer,   0); }
 
   atualizaLedBotoes();
@@ -414,8 +450,13 @@ void loop() {
   } //Grava conteúdo dos minutos e Segundos gravados  
 
 //----------- VERIFICA SE O BOTÃO LIGA OU REVERTE FORAM PRESSIONADOS PARA FICAR CHAMANDO AS TELAS CORRETAMENTE----------------
-  if(StatusLiga && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca) draw(5);
-  else if (StatusRevert && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca) draw(6);
+  if(StatusLiga && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca && !StatusRevert && !statuDesl && fRamp)  {
+    draw(5);
+    draw(5);
+  }
+  else if (StatusRevert && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca && !StatusLiga && !statuDesl && fRamp){
+    draw(6);
+  }
 
 //----------- A CADA 2S MONITORA TENSÃO DA REDE, E CORRRNTE SE O MOTOR ESTIVER LIGADO---------------
   if(millis() - timer1 > 1000) {
@@ -438,51 +479,16 @@ void loop() {
     {
      atualizaSaidaSS(buzzer,   1);
      sTBeeb = !sTBeeb;
-     Serial.println("Buzzer_ON");
     }
     else if (millis() - timeBeepCorrente >= timeBeep*2 && sTBeeb)
     {
       atualizaSaidaSS(buzzer,   0);
-      sTBeeb = !sTBeeb;
-      auxCont++;
-      Serial.println("Buzzer_OFF");
-      Serial.println();
-      Serial.println(auxCont*timeBeep*2);
-      Serial.println();
-      
-      //CASO PERMANEÇA POR MAIS DE 50s COM CORRENTE ALTA O EQUIPAMENTO SE DESLIGA SOZINHO
-      if (auxCont*timeBeep*2 >= tempTurnOff*1000)
-      {
-        V_baixaDetectada = false;
-        V_extBaixaDetectada = false;
-        I_altaDetectada = false;
-        I_muitoAltaDetectada = false;
-        condGravaEprom  =   true;
-        delayGravaEprom = millis();
-        Serial.println();
-        Serial.print("Habilita Grava Flash");
-        fRamp = 1;
-
-        StatusLiga      =   false;
-        StatusRevert    =   false;
-        statuDesl       =   true; 
-
-        atualizaSaidaSS(byPass,   0);
-        atualizaSaidaSS(hora,     0);
-        atualizaSaidaSS(antHor,   0);
-        atualizaSaidaSS(triac,    0);
-        atualizaSaidaSS(buzzer,   0);
-        auxCont = 0;
-
-          if(confLinha < linha && !StGravaFlah){
-            grava_dado_nvs(linha , 'L');
-          }  
-      } 
+      sTBeeb = !sTBeeb;      
       timeBeepCorrente = millis();
     }
 
     //APÓS 3 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
-    if(millis() - tempSobCorrent > 3000){
+    if(millis() - tempSobCorrent > 3000 && !contSobreCorre){
       I_altaDetectada = false;
       contSobreCorre = 0;
 
@@ -509,15 +515,22 @@ void loop() {
      atualizaSaidaSS(buzzer,   1);
      sTBeeb = !sTBeeb;
     }
-    else if (millis() - timeBeepCorrente >= 600 && sTBeeb)
+    else if (millis() - timeBeepCorrente >= timeBeep*2 && sTBeeb)
     {
       atualizaSaidaSS(buzzer,   0);
       sTBeeb = !sTBeeb;
+      auxCont++;
+      timeBeepCorrente = millis();
+      
     }
+      //CASO PERMANEÇA POR MAIS DE 15s COM CORRENTE ALTA O EQUIPAMENTO SE DESLIGA SOZINHO
+      if (auxCont*timeBeep*2 >= tempTurnOff*1000) turnOffHHCurrent(); 
+     
 
-    //APÓS 20 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
-    if(millis() - tempSobCorrent > 2000){
+    //APÓS 3 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
+    if(millis() - tempSobCorrent > 3000 && !contExtSobreCorre){
       I_muitoAltaDetectada = false;
+      atualizaSaidaSS(buzzer,   0);
       contExtSobreCorre = 0;
       if(StatusLiga) draw(5);
       if(StatusRevert) draw(6);
@@ -550,12 +563,12 @@ void loop() {
 //                                  ------------ SISTEMA DE PARTIDA DO MOTOR  ----------
 //------------------------------------------------------------------------------------------------------------------------------
   if((StatusLiga || StatusRevert) && (millis() - finalRamp >= 600) && fRamp == 0){
-    atualizaSaidaSS(triac,   1); 
+   // atualizaSaidaSS(triac,   1); 
     if (millis() - finalRamp >= 1000)
     {
       atualizaSaidaSS(byPass,   1);
-      delay(200);
-      atualizaSaidaSS(triac, 0);
+    //  delay(200);
+  //    atualizaSaidaSS(triac, 0);
       fRamp = 1;
     }
   }
@@ -635,14 +648,14 @@ void statusSensores(){
 void calculaCorrente(){
  //DESCOMENTAR AS DUAS PRÓXIMAS LINHAS PARA A LEITURA PARA A LEITURA CORRETA DA CORRENTE COM O SENSOR NÃO INVASIVO 
   /* --------   SIMULAÇÃO DE PARA TESTES CORRENTE ALTA -------------*/
-  /*if(seg >5 && seg <15)Irms = 15;
-  else if (seg >= 15 && seg < 25)Irms = 8;
-  else if (seg >= 25 && seg < 35)Irms = 15;
+ /* if(seg >5 && seg <10)Irms = 8;
+  else if (seg >= 15 && seg < 50)Irms = 13;
+  else if (seg >= 50 && seg < 58)Irms = 8;
   else Irms = 8;*/
   
-  //Irms = 8;
+  //Irms = 13;
   Irms = emon1.calcIrms(1480);        // Configura número de amostras para a corrente 
-  Serial.println(Irms );
+ // Serial.println(Irms );
   if(Irms < 1) Irms = Irms*0;         // Caso a corrente for menor que 1A desconsidera a corrente drenada 
  //Irms = 11.1;
 }
@@ -935,6 +948,8 @@ void  telafixa(boolean SR1, boolean ST, boolean EM) {
     u8g2.drawCircle(27,56,4); //(27,54,4)
   else
     u8g2.drawDisc(27,56,4);//(27,54,4)
+
+  
 }
 
 
@@ -1034,12 +1049,14 @@ void draw(int tela){
         telafixa(!statusSR1, !statusST, !StatusEmerg);
         contagemHoras(horas, minutos);
         prot_rolos(!statusSR1);
+        controleDisp = tela;
         break;
 
       case 3: //Apresenta as informações em relação a falta de sinal do sensor de protação das transmissões 
         telafixa(!statusSR1, !statusST, !StatusEmerg);
         contagemHoras(horas, minutos);
         prot_transmissao(statusST);
+        controleDisp = tela;
         break;
 
       case 4: //Apresenta as informações caso o botão de emergência tenha sido acionado 
@@ -1050,10 +1067,11 @@ void draw(int tela){
         break;
 
       case 5: //Apresenta tela da máquina em operação "LIGADA"
+       // reiniciaDisp(tela);
         telafixa(!statusSR1, !statusST, !StatusEmerg);
         contagemHoras(horas, minutos);
         emOperacaoLigada();
-        controleDisp = tela;
+       // controleDisp = tela;
         break;
 
       case 6: //Apresenta a tela da máquina em operação "REVERSÂO"
@@ -1239,8 +1257,8 @@ void emOperacaoReversa(){
 void atualizaHorimetro(){
   if(millis() - horimetro >= 1000) {
     seg++;
-    Serial.print("Segundos = ");
-    Serial.println(seg);
+   // Serial.print("Segundos = ");
+   // Serial.println(seg);
 //-----CONTAGEM DOS MINUTOS ----------
     if(seg == 60){
       minutos++;
@@ -1934,25 +1952,22 @@ void  lubrifique(){
 ====================================================================================*/
 void IRAM_ATTR InterrupLIGA(){
   if(!StGravaFlah){
-    if(!StatusRevert && !habCallDB && statusSeguranca)  {
+    if(!StatusRevert && !habCallDB && statusSeguranca && !StGravaFlah && millis() - reabOp >= 1300 )  {
       StatusLiga      =   true;
       statuDesl       =   false;
       StatusRevert    =   false;
       condGravaEprom  =   false;
       horimetro       =   millis();
-      Serial.println("LIGA");
-//      delay(10);
+    //  Serial.println("LIGA");
     }
     else   StatusLiga = false;
     
-
     if(StatusLiga && statusSeguranca && tempoinicializacao > 8000){
       atualizaSaidaSS(hora,     1);
-    //  atualizaSaidaSS(triac,    1); 
       
       finalRamp = millis();
       fRamp = 0;
-      draw(5);
+      //draw(5);
     }
   }
 }
@@ -1960,10 +1975,10 @@ void IRAM_ATTR InterrupLIGA(){
                 FUNÇÃO DE TRATAMENTO DA INTERRUPÇÃO DO BOTÃO DESLIGA  
 ====================================================================================*/
 void IRAM_ATTR InterrupDESL(){
+  if(!StatusEmerg && !StatusLiga && !StatusRevert && statusSeguranca)reiniciaDisp(0); // Condição de inicialização do display  
   if(!StGravaFlah){
     if(habCallDB) timeHideDB = millis();
-    Serial.println("DESL.");
-//    delay(10);
+   // Serial.println("DESL.");
     
     if(StatusLiga || StatusRevert) {
       V_baixaDetectada = false;
@@ -1972,8 +1987,8 @@ void IRAM_ATTR InterrupDESL(){
       I_muitoAltaDetectada = false;
       condGravaEprom  =   true;
       delayGravaEprom = millis();
-      Serial.println();
-      Serial.print("Habilita Grava Flash");
+     // Serial.println();
+     // Serial.print("Habilita Grava Flash");
       fRamp = 1;
 
       if(confLinha < linha && !StGravaFlah){
@@ -1993,8 +2008,9 @@ void IRAM_ATTR InterrupDESL(){
     atualizaSaidaSS(byPass,   0);
     atualizaSaidaSS(hora,     0);
     atualizaSaidaSS(antHor,   0);
-    atualizaSaidaSS(triac,    0);
+   // atualizaSaidaSS(triac,    0);
     atualizaSaidaSS(buzzer,   0);
+    reabOp  = millis();
   }
 }
 /*==================================================================================
@@ -2002,14 +2018,13 @@ void IRAM_ATTR InterrupDESL(){
 ====================================================================================*/
 void IRAM_ATTR InterrupREVERT(){
   if(!StGravaFlah){
-    if(!StatusLiga && !habCallDB && statusSeguranca && !StGravaFlah)  {
+    if(!StatusLiga && !habCallDB && statusSeguranca && !StGravaFlah && millis() - reabOp >= 1300)  {
       StatusRevert = true;
       statuDesl    = false;
       StatusLiga   = false;
       condGravaEprom  =   false;
       horimetro       =   millis();
-      Serial.println("REVERT");
-//      delay(10);
+   //  Serial.println("REV");
     }
     else StatusRevert = false;
 
@@ -2019,7 +2034,7 @@ void IRAM_ATTR InterrupREVERT(){
   
       finalRamp = millis();
       fRamp = 0;
-      draw(6);
+      //draw(6);
       }
   }
 }
@@ -2047,9 +2062,8 @@ void IRAM_ATTR InterrupEMERG(){
   atualizaSaidaSS(byPass,   false);
   atualizaSaidaSS(hora,     false);
   atualizaSaidaSS(antHor,   false);
-  atualizaSaidaSS(triac,    false);
+ // atualizaSaidaSS(triac,    false);
 }
-
 
 /*==================================================================================
 ----------------- FUNÇÃO DE GRAVAÇÃO DE DADOS NO ARQUIVO LITTLEFS  -----------------  
@@ -2083,7 +2097,6 @@ void addDataToFile(int hora, int min, int segundos, int corrente, int tensao){
             dataFile.print(tensao);
             dataFile.printf(" - ");
             dataFile.println(corrente);
- //         delay(5);
             dataFile.close();
         }else{
             Serial.println("Erro ao Abrir o Arquivo");
@@ -2249,6 +2262,38 @@ void libMemorisFS(){
 
 
 
+/*====================================================================================================
+        FUNÇÃO DE DESLIGAMENTO AUTOMÁTICO DO MONTOR EM CASO DE CORRENTE MUITO ALTA APÓS 15s    
+======================================================================================================*/
+void turnOffHHCurrent(){
+  V_baixaDetectada = false;
+  V_extBaixaDetectada = false;
+  I_altaDetectada = false;
+  I_muitoAltaDetectada = false;
+  condGravaEprom  =   true;
+  delayGravaEprom = millis();
+  Serial.println();
+  Serial.print("Habilita Grava Flash");
+  fRamp = 1;
+
+  StatusLiga      =   false;
+  StatusRevert    =   false;
+  statuDesl       =   true; 
+
+  atualizaSaidaSS(byPass,   0);
+  atualizaSaidaSS(hora,     0);
+  atualizaSaidaSS(antHor,   0);
+  atualizaSaidaSS(triac,    0);
+  atualizaSaidaSS(buzzer,   0);
+  auxCont = 0;
+
+  if(confLinha < linha && !StGravaFlah){
+     grava_dado_nvs(linha , 'L');
+  }
+}
+
+
+
 /*==================================================================================
                         FUNÇÃO DE REINICIALIZAÇÃO DO DISPLAY    
 ====================================================================================*/
@@ -2258,4 +2303,9 @@ void reiniciaDisp(int nT){
     controleDisp = nT;
    // Serial.println("REINICIALIZAÇÃO DISPLAY");
   }
+}
+
+void IRAM_ATTR resetModule(){
+    ets_printf("(watchdog) reiniciar\n"); //imprime no log
+    esp_restart(); //reinicia o chip
 }
