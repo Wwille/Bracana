@@ -452,7 +452,6 @@ void loop() {
 //----------- VERIFICA SE O BOTÃO LIGA OU REVERTE FORAM PRESSIONADOS PARA FICAR CHAMANDO AS TELAS CORRETAMENTE----------------
   if(StatusLiga && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca && !StatusRevert && !statuDesl && fRamp)  {
     draw(5);
-    draw(5);
   }
   else if (StatusRevert && !I_altaDetectada && !I_muitoAltaDetectada && !V_extBaixaDetectada && !V_baixaDetectada && statusSeguranca && !StatusLiga && !statuDesl && fRamp){
     draw(6);
@@ -541,22 +540,14 @@ void loop() {
 //------------------------------------------------------------------------------------------------------------------------------
   if(V_extBaixaDetectada && !habCallDB && !StatusEmerg && !habCallDB && !statusSR1 && !statusST){
     draw(8);
-    if(millis() - tempSubtensao > 2000){
-      V_extBaixaDetectada = false;
-      contSubTensaoExtrema = 0;
-      if(StatusLiga) draw(5);
-      if(StatusRevert) draw(6);
-    }
+
+    if(millis() - tempSubtensao > 2000 && contSubTensaoExtrema == 0) V_extBaixaDetectada = false; 
   }
   
   else if(V_baixaDetectada && !habCallDB && !StatusEmerg && !habCallDB && !statusSR1 && !statusST){
     draw(7);
-    if(millis() - tempSubtensao > 2000){
-      V_baixaDetectada = false;
-      contSubTensao = 0;
-      if(StatusLiga) draw(5);
-      if(StatusRevert) draw(6);
-    }
+
+    if(millis() - tempSubtensao > 2000 && contSubTensao == 0)  V_baixaDetectada = false;
   }
 
 //------------------------------------------------------------------------------------------------------------------------------
@@ -580,7 +571,6 @@ void loop() {
 ====================================================================================*/
 void statusSensores(){
  statusSR1  =  digitalRead(fcPr1);
- //statusSR2  =  digitalRead(fcPr2);
  statusST   =  digitalRead(fcPt);
 
  if(!digitalRead(btEmegencia)) StatusEmerg = false;
@@ -749,11 +739,13 @@ void analisaTensaoRede(){
       //Armazenar no banco de cados 
       V_extBaixaDetectada = true;
       analisPreArmaz();
-   //   montaDB(horas, minutos, Irms*10, tensaoDaRede);
+     //montaDB(horas, minutos, Irms*10, tensaoDaRede);
       tempSubtensao = millis();
     }
   }
-  if(!nivelTensao && tensaoDaRede > 203) contSubTensaoExtrema = 0; 
+  if(!nivelTensao && tensaoDaRede > 203) {
+    contSubTensaoExtrema = 0; 
+  }
 
   //-----------------------------------------------------------------------------
 
@@ -785,7 +777,9 @@ void analisaTensaoRede(){
       tempSubtensao = millis();
     }
   }
-  if(nivelTensao && tensaoDaRede > 116) contSubTensaoExtrema = 0; 
+  if(nivelTensao && tensaoDaRede > 116){
+     contSubTensaoExtrema = 0; 
+  }
 }
 
 /*==================================================================================
@@ -1793,7 +1787,7 @@ void banco_de_dados(){
   
   for(int i = 0 ; i <= 56 ; i=i+8){
     if(contLinha <= linha){
-      u8g2.drawStr(1,  (i-1) , "    .  h");
+      u8g2.drawStr(1,  (i-1) , "    :  h");
       u8g2.drawStr(54, (i-1) , "     V");
       u8g2.drawStr(108, (i-1) , ".");
       u8g2.drawStr(120, (i-1) , "A");
@@ -1967,7 +1961,7 @@ void IRAM_ATTR InterrupLIGA(){
       
       finalRamp = millis();
       fRamp = 0;
-      //draw(5);
+   //   draw(5);
     }
   }
 }
