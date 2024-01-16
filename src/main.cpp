@@ -52,7 +52,8 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 #define rw                       19   //Read/Write do display 
 #define rs                       21   //RS do display 
 #define rst                      22   //Reset do display
-#define btEmegencia              23   //Entrada digital do botão de emergência 
+#define btEmegencia              23   //Entrada digital do botão de emergência
+#define OE                       26 
 
 #define TEMP_LUBRIFICA           800 //Tempo para librificação da máquina em horas 
 
@@ -217,6 +218,7 @@ uint16_t          db[8][4]{
  boolean StGravaFlah          =   false; //Se linha do banco > 7 "StGravaFlah" vai para true, indicando gravação do BD
  boolean sTBeeb               =   false;
  boolean habBeep              =   false;
+ boolean firstAnTensao        =   false;
 
 
 /*==================================================================================
@@ -232,6 +234,7 @@ void IRAM_ATTR resetModule();
 void statusSensores();                        //Funçaõ responsável por verificar o estatus dos sensores da moenda 
 void atualizaSaidaSS(int posicao, int i);     //Função de atualização das saídas do ShiftSelect
 void calculaTensaoRede();                     //Função que realiza o cáculo da tensão da rede 
+void calculaTensaoRede_rms();
 void atualizaLedBotoes();                     //Função de acionamento do led dos botões da moenda 
 void inicializadisplay();                     //Função que inicializa as configurações principais do displai ( sentido de escrita e orientação ) 
 void telafixa(boolean SR1, boolean ST, boolean EM);  //Função que chama a telafixa do display(as divisões da tela)
@@ -268,10 +271,16 @@ void libMemorisFS();
 void reiniciaDisp(int nT);
 void turnOffHHCurrent();
 
-
 hw_timer_t *timer = NULL;
+
 void setup(){
 
+  pinMode(OE, OUTPUT);
+  digitalWrite(OE, HIGH);
+  pinMode(ds,           OUTPUT);
+  pinMode(stcp,         OUTPUT);
+  pinMode(shcp,         OUTPUT);
+  
   /*------------- INICIALIZAÇÃO DO SISTEMA DE ARQUIVOS FS ---------------*/
     if(LittleFS.begin()){ Serial.println(F("LittleFS Inicializado.."));}
     else{Serial.println(F("Fail to Open LittleFs Open.."));}
@@ -291,14 +300,11 @@ void setup(){
 
   uint16_t dadoLidoHora;
   uint16_t dadoLidoMin;
-
-  
   /*==================================================================================
                             DEFINIÇÃO DE ENTRADAS DIGITAIS   
   ====================================================================================*/
   pinMode(fcPr1,        INPUT);
   pinMode(fcPr2,        INPUT);
- //pinMode(sinTrava,     INPUT);
   pinMode(btLiga,       INPUT);
   pinMode(btDesliga,    INPUT);
   pinMode(btReverte,    INPUT);
@@ -307,10 +313,7 @@ void setup(){
   /*==================================================================================
                             DEFINIÇÃO DE SAÍDAS DIGITAIS   
   ====================================================================================*/
-  pinMode(ds,           OUTPUT);
-  pinMode(stcp,         OUTPUT);
-  pinMode(shcp,         OUTPUT);
-  pinMode(liberaTrava,  OUTPUT);
+
 
   /*==================================================================================
                       CONFIGURAÇÃO DAS INTERRUÇÕES EXTERNAS    
@@ -396,16 +399,18 @@ void setup(){
 
     reabOp = millis();
 
-    delay(100);
-    u8g2.begin();
-    delay(100);
+    u8g2.begin();  
+    
 } 
 
 void loop() {
   timerWrite(timer, 0);
   tempoparainicializacao();
   tempomensagensdealerta();
-  if(tempoinicializacao < 8000)  draw(0);
+  if(tempoinicializacao < 8000){
+    draw(0); 
+    digitalWrite(OE, LOW); 
+  }  
 
   if (tempoinicializacao > 8000){
    statusSensores();
@@ -458,16 +463,21 @@ void loop() {
   }
 
 //----------- A CADA 2S MONITORA TENSÃO DA REDE, E CORRRNTE SE O MOTOR ESTIVER LIGADO---------------
-  if(millis() - timer1 > 1000) {
-    calculaTensaoRede();
-    if(StatusLiga || StatusRevert){
+  if(millis() - timer1 > 1666  && StatusLiga || StatusRevert) {
+   // calculaTensaoRede();
+    calculaTensaoRede_rms();
+    analisaTensaoRede();
+
+    calculaCorrente();
+    analizeCorrenteMotor(); 
+  }
+  /*  if(StatusLiga || StatusRevert){
       calculaCorrente();
       analizeCorrenteMotor();
 
       if(i > 9) {analisaTensaoRede();}
-    }
-    timer1 = millis();
-  }
+    }*/
+  
   if (habCallDB && !StatusEmerg) draw(11);
   
 // ------------ DETECÇÃO DE CORRENTE ALTA E CORRENTE MUITO ALTA E CHAMADA CORRETA DAS TELAS, MENSAGEM PERMANECE POS 20S----------
@@ -554,16 +564,17 @@ void loop() {
 //                                  ------------ SISTEMA DE PARTIDA DO MOTOR  ----------
 //------------------------------------------------------------------------------------------------------------------------------
   if((StatusLiga || StatusRevert) && (millis() - finalRamp >= 600) && fRamp == 0){
-   // atualizaSaidaSS(triac,   1); 
-    if (millis() - finalRamp >= 1000)
+    atualizaSaidaSS(triac,   1); 
+    if (millis() - finalRamp >= 1400)
     {
       atualizaSaidaSS(byPass,   1);
-    //  delay(200);
-  //    atualizaSaidaSS(triac, 0);
-      fRamp = 1;
+      if (millis() - finalRamp >= 1600)
+      {
+        atualizaSaidaSS(triac, 0);
+        fRamp = 1;
+      }  
     }
   }
-
 }/*END LOOP*/
 
 /*==================================================================================
@@ -645,7 +656,7 @@ void calculaCorrente(){
   
   //Irms = 13;
   Irms = emon1.calcIrms(1480);        // Configura número de amostras para a corrente 
- // Serial.println(Irms );
+  //Serial.println(Irms );
   if(Irms < 1) Irms = Irms*0;         // Caso a corrente for menor que 1A desconsidera a corrente drenada 
  //Irms = 11.1;
 }
@@ -709,6 +720,53 @@ void calculaTensaoRede(){
    Serial.println(tensaoDaRede);
    i++;
  }  
+}
+/*==================================================================================
+                          FUNÇÃO PARA CÁLCULO DA TENSÃO DA REDE  
+====================================================================================*/
+void calculaTensaoRede_rms(){
+
+  float amostras[400];          // Variável criada para armazenar as amostras lidas pelo arduino
+  float tensaoPROTO[400];       // Utilizada para armazenar os valores correspondentes a tensão na protoboard
+  float tensaoREAL[400];        // Valores reais de tensão
+
+  int i;
+  float soma = 0;
+  float tensaoRMS;
+
+    for(i = 0; i < 400; i++)
+  {
+    amostras[i] = analogRead(tensaoRede);
+    delayMicroseconds(88.33);
+  }
+
+    for(i = 0; i < 400; i++)
+  {
+    tensaoPROTO[i] = (amostras[i] * 0.00080566) - 1.65;
+    
+    tensaoREAL[i] = tensaoPROTO[i] * 385.06;
+    tensaoREAL[i] = tensaoREAL[i] * tensaoREAL[i];
+    soma = tensaoREAL[i] + soma;
+  }
+
+  tensaoRMS = soma / 400;
+  tensaoRMS = (sqrt(tensaoRMS)) -43;
+  tensaoDaRede  = ((uint)tensaoRMS);
+
+  
+  if(!firstAnTensao){
+    if(tensaoDaRede > 180) nivelTensao = false;    //Tensão da rede de alimentação é 220Vca
+    else nivelTensao = true;                       //Tensão da rede de alimentação é 127Vca 
+    firstAnTensao = true;
+  }                   
+  
+ //Serial.print("Tensao: ");
+ //Serial.println(tensaoRMS);
+  tensaoRMS = 0;
+
+ // Serial.println("");
+
+  timer1 = millis();
 }
 
 /*=====================================================================================
@@ -2002,7 +2060,7 @@ void IRAM_ATTR InterrupDESL(){
     atualizaSaidaSS(byPass,   0);
     atualizaSaidaSS(hora,     0);
     atualizaSaidaSS(antHor,   0);
-   // atualizaSaidaSS(triac,    0);
+    atualizaSaidaSS(triac,    0);
     atualizaSaidaSS(buzzer,   0);
     reabOp  = millis();
   }
@@ -2018,17 +2076,14 @@ void IRAM_ATTR InterrupREVERT(){
       StatusLiga   = false;
       condGravaEprom  =   false;
       horimetro       =   millis();
-   //  Serial.println("REV");
     }
     else StatusRevert = false;
 
     if(StatusRevert && statusSeguranca && tempoinicializacao > 8000 && !StGravaFlah){
       atualizaSaidaSS(antHor,   1);
-      //atualizaSaidaSS(triac,    1); 
   
       finalRamp = millis();
       fRamp = 0;
-      //draw(6);
       }
   }
 }
@@ -2056,7 +2111,7 @@ void IRAM_ATTR InterrupEMERG(){
   atualizaSaidaSS(byPass,   false);
   atualizaSaidaSS(hora,     false);
   atualizaSaidaSS(antHor,   false);
- // atualizaSaidaSS(triac,    false);
+  atualizaSaidaSS(triac,    false);
 }
 
 /*==================================================================================
@@ -2253,7 +2308,6 @@ void libMemorisFS(){
 
     Serial.println("Exclusão parcial de dados concluída com sucesso!");
 }
-
 
 
 /*====================================================================================================
