@@ -3,7 +3,7 @@
 PROGRAMAÇÃO MOENDA MAQTRON
 
 AUTOR: Robison Walter Wille 
-DATA: 24/06/2022
+DATA: 29/02/2024
 ========================================================================================================================
 */
 
@@ -18,7 +18,6 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 */
 
 #include <Arduino.h>
-//#include <SPI.h>
 #include "EmonLib.h"
 #include <U8g2lib.h>
 #include <string.h>
@@ -109,6 +108,7 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 
 // DEFINIÇÃO DE PINAGEM DO DISPLAY 
 U8G2_ST7920_128X64_1_SW_SPI u8g2(U8G2_R0, ena, rw, rs, rst);
+
 
 /*======================================================================================================================
                                    DEFINIÇÕES DE VARIÁVEIS GLOBAIS
@@ -219,6 +219,7 @@ uint16_t          db[8][4]{
  boolean sTBeeb               =   false;
  boolean habBeep              =   false;
  boolean firstAnTensao        =   false;
+ boolean tempVBaixa           =   false;
 
 
 /*==================================================================================
@@ -462,22 +463,17 @@ void loop() {
     draw(6);
   }
 
-//----------- A CADA 2S MONITORA TENSÃO DA REDE, E CORRRNTE SE O MOTOR ESTIVER LIGADO---------------
-  if(millis() - timer1 > 1666  && StatusLiga || StatusRevert) {
-   // calculaTensaoRede();
+//----------- A CADA 2S MONITORA TENSÃO DA REDE, E CORRRENTE SE O MOTOR ESTIVER LIGADO---------------
+  if(millis() - timer1 > 1666) {
+    if(StatusLiga || StatusRevert){
+      calculaCorrente();
+      analizeCorrenteMotor(); 
+    }
+    
     calculaTensaoRede_rms();
     analisaTensaoRede();
-
-    calculaCorrente();
-    analizeCorrenteMotor(); 
   }
-  /*  if(StatusLiga || StatusRevert){
-      calculaCorrente();
-      analizeCorrenteMotor();
 
-      if(i > 9) {analisaTensaoRede();}
-    }*/
-  
   if (habCallDB && !StatusEmerg) draw(11);
   
 // ------------ DETECÇÃO DE CORRENTE ALTA E CORRENTE MUITO ALTA E CHAMADA CORRETA DAS TELAS, MENSAGEM PERMANECE POS 20S----------
@@ -533,7 +529,7 @@ void loop() {
       
     }
       //CASO PERMANEÇA POR MAIS DE 15s COM CORRENTE ALTA O EQUIPAMENTO SE DESLIGA SOZINHO
-      if (auxCont*timeBeep*2 >= tempTurnOff*1000) turnOffHHCurrent(); 
+      if (auxCont*timeBeep*2 >= tempTurnOff*1000 ) turnOffHHCurrent(); 
      
 
     //APÓS 3 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
@@ -548,16 +544,16 @@ void loop() {
 //------------------------------------------------------------------------------------------------------------------------------
 // ------------ DETECÇÃO DE TENSÃO BAIXA E TENSAÃO MUITO BAIXA E CHAMADA CORRETA DAS TELAS, MENSAGEM PERMANECE POS 2S----------
 //------------------------------------------------------------------------------------------------------------------------------
-  if(V_extBaixaDetectada && !habCallDB && !StatusEmerg && !habCallDB && !statusSR1 && !statusST){
+  if(V_extBaixaDetectada && !habCallDB && !StatusEmerg && !statusSR1 && !statusST){
     draw(8);
 
-    if(millis() - tempSubtensao > 2000 && contSubTensaoExtrema == 0) V_extBaixaDetectada = false; 
+    if( contSubTensaoExtrema == 0) V_extBaixaDetectada = false; 
   }
   
-  else if(V_baixaDetectada && !habCallDB && !StatusEmerg && !habCallDB && !statusSR1 && !statusST){
+  else if(V_baixaDetectada && !habCallDB && !StatusEmerg && !statusSR1 && !statusST){
     draw(7);
 
-    if(millis() - tempSubtensao > 2000 && contSubTensao == 0)  V_baixaDetectada = false;
+    if(contSubTensao == 0)  V_baixaDetectada = false;
   }
 
 //------------------------------------------------------------------------------------------------------------------------------
@@ -649,14 +645,16 @@ void statusSensores(){
 void calculaCorrente(){
  //DESCOMENTAR AS DUAS PRÓXIMAS LINHAS PARA A LEITURA PARA A LEITURA CORRETA DA CORRENTE COM O SENSOR NÃO INVASIVO 
   /* --------   SIMULAÇÃO DE PARA TESTES CORRENTE ALTA -------------*/
- /* if(seg >5 && seg <10)Irms = 8;
+ /*if(seg >5 && seg <10)Irms = 8;
   else if (seg >= 15 && seg < 50)Irms = 13;
   else if (seg >= 50 && seg < 58)Irms = 8;
   else Irms = 8;*/
   
   //Irms = 13;
   Irms = emon1.calcIrms(1480);        // Configura número de amostras para a corrente 
-  //Serial.println(Irms );
+  //if(nivelTensao) Irms = Irms / 2;
+  
+ //Serial.println(Irms );
   if(Irms < 1) Irms = Irms*0;         // Caso a corrente for menor que 1A desconsidera a corrente drenada 
  //Irms = 11.1;
 }
@@ -749,19 +747,35 @@ void calculaTensaoRede_rms(){
     soma = tensaoREAL[i] + soma;
   }
 
-  tensaoRMS = soma / 400;
-  tensaoRMS = (sqrt(tensaoRMS)) -43;
-  tensaoDaRede  = ((uint)tensaoRMS);
+  if(!firstAnTensao){
+    tensaoRMS = soma / 400;
+    tensaoRMS = (sqrt(tensaoRMS)) -39;
+    tensaoDaRede  = ((uint)tensaoRMS);
+    Serial.println("PRIMEIRA MEDIDA");
+  }
+  else if (firstAnTensao && !nivelTensao)
+  {
+    tensaoRMS = soma / 400;
+    tensaoRMS = (sqrt(tensaoRMS)) -36;
+    tensaoDaRede  = ((uint)tensaoRMS);
+    Serial.println("Tensao 220");
+  }
+  else if (firstAnTensao && nivelTensao)
+  {
+    tensaoRMS = soma / 400;
+    tensaoRMS = (sqrt(tensaoRMS)) -28;
+    tensaoDaRede  = ((uint)tensaoRMS);
+    Serial.println("Tensao 127");
+  }
 
-  
   if(!firstAnTensao){
     if(tensaoDaRede > 180) nivelTensao = false;    //Tensão da rede de alimentação é 220Vca
     else nivelTensao = true;                       //Tensão da rede de alimentação é 127Vca 
     firstAnTensao = true;
   }                   
   
- //Serial.print("Tensao: ");
- //Serial.println(tensaoRMS);
+ Serial.print("Tensao: ");
+ Serial.println(tensaoRMS);
   tensaoRMS = 0;
 
  // Serial.println("");
@@ -775,69 +789,57 @@ void calculaTensaoRede_rms(){
 void analisaTensaoRede(){
 
   // VERIFICA SUBTENSÃO PARA TENSÃO DE TRABALHO DE 220V
-  if(!nivelTensao && tensaoDaRede > 203 && tensaoDaRede < 210){
+  if(!nivelTensao && tensaoDaRede < 204){
     contSubTensao++;
     Serial.println(contSubTensao);
 
-    if(contSubTensao >= 5 && !V_baixaDetectada && StatusLiga){
+    if(contSubTensao >= 5 && !V_baixaDetectada){
       //Armazenar no banco de cados 
       V_baixaDetectada = true;
+      tempVBaixa = false;
       analisPreArmaz();
-//    montaDB(horas, minutos, Irms*10, tensaoDaRede);
-      tempSubtensao = millis();
     }
   }
-  if(!nivelTensao && tensaoDaRede >= 210) contSubTensao = 0;
-
-  // VERIFICA SUBTENSÃO EXTREMA PARA TENSÃO DE TRABALHO DE 220V
-  if(!nivelTensao && tensaoDaRede <= 203){
-    contSubTensaoExtrema++;
-
-    if(contSubTensaoExtrema >= 5 && !V_extBaixaDetectada  && StatusLiga){  // 
-      //Armazenar no banco de cados 
-      V_extBaixaDetectada = true;
-      analisPreArmaz();
-     //montaDB(horas, minutos, Irms*10, tensaoDaRede);
-      tempSubtensao = millis();
-    }
+  if(!nivelTensao && tensaoDaRede >= 204 && !tempVBaixa) 
+  {
+    tempSubtensao = millis();
+    tempVBaixa  = true;
   }
-  if(!nivelTensao && tensaoDaRede > 203) {
-    contSubTensaoExtrema = 0; 
+
+  if(!nivelTensao && tensaoDaRede >= 204 && millis() - tempSubtensao > 5000 )
+  {
+   contSubTensao = 0;
+   V_baixaDetectada = false;
   }
 
   //-----------------------------------------------------------------------------
 
   // VERIFICA SUBTENSÃO PARA TENSÃO DE TRABALHO DE 127V
-  if(nivelTensao && tensaoDaRede+12 > 116 && tensaoDaRede+12 < 121){
+  if(nivelTensao && tensaoDaRede < 118){
     contSubTensao++;
 
-    if(contSubTensao >= 5 && !V_baixaDetectada  && StatusLiga){
+    if(contSubTensao >= 5 && !V_baixaDetectada){
       //Armazenar no banco de cados 
       V_baixaDetectada = true;
+      tempVBaixa = false;
       analisPreArmaz();
  //   montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
-      tempSubtensao = millis();
+     
     }
+  if(nivelTensao && tensaoDaRede >= 118 && !tempVBaixa)
+  {
+    tempSubtensao = millis();
+    tempVBaixa  = true;
   }
-  if(nivelTensao && tensaoDaRede+12 >= 121) contSubTensao = 0;
 
-
-// VERIFICA SUBTENSÃO EXTREMA PARA TENSÃO DE TRABALHO DE 127V
-  if(nivelTensao && tensaoDaRede+12 <= 116 ){
-    contSubTensaoExtrema++;
-
-    if(contSubTensaoExtrema >= 5 && !V_extBaixaDetectada  && StatusLiga){  // 
-      //Armazenar no banco de cados 
-      V_extBaixaDetectada = true;
-      analisPreArmaz();
-
-     // montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
-      tempSubtensao = millis();
-    }
   }
-  if(nivelTensao && tensaoDaRede > 116){
-     contSubTensaoExtrema = 0; 
+  if(nivelTensao && tensaoDaRede >= 118 && millis() - tempSubtensao > 5000) 
+  {
+   contSubTensao = 0;
+   V_baixaDetectada = false;
   }
+
+  if(contSubTensao > 10 && (StatusLiga || StatusRevert))turnOffHHCurrent();
 }
 
 /*==================================================================================
@@ -1137,6 +1139,7 @@ void draw(int tela){
         telafixa(!statusSR1, !statusST, !StatusEmerg);
         contagemHoras(horas, minutos);
         alerta_Vbaixa();
+        reiniciaDisp(tela);
         controleDisp = tela;
         break;
 
@@ -1396,7 +1399,7 @@ if(StatusLiga || StatusRevert){
 else{ 
   u8g2.setFont(u8g2_font_timB10_tr);
   u8g2.drawStr(38, 30, "MOENDA");
-  u8g2.drawStr(38, 45, "EM ESPERA");
+  u8g2.drawStr(38, 45, "INOPERANTE");
   u8g2.setFont(u8g2_font_timR08_tr);
   u8g2.drawStr(107, 31, "E01");
   u8g2.drawFrame(105, 30,19,12);}
@@ -2004,7 +2007,7 @@ void  lubrifique(){
 ====================================================================================*/
 void IRAM_ATTR InterrupLIGA(){
   if(!StGravaFlah){
-    if(!StatusRevert && !habCallDB && statusSeguranca && !StGravaFlah && millis() - reabOp >= 1300 )  {
+    if(!StatusRevert && !habCallDB && statusSeguranca && !StGravaFlah && millis() - reabOp >= 1300 &&  !V_baixaDetectada )  {
       StatusLiga      =   true;
       statuDesl       =   false;
       StatusRevert    =   false;
@@ -2033,8 +2036,8 @@ void IRAM_ATTR InterrupDESL(){
    // Serial.println("DESL.");
     
     if(StatusLiga || StatusRevert) {
-      V_baixaDetectada = false;
-      V_extBaixaDetectada = false;
+   //   V_baixaDetectada = false;
+   //   V_extBaixaDetectada = false;
       I_altaDetectada = false;
       I_muitoAltaDetectada = false;
       condGravaEprom  =   true;
@@ -2058,10 +2061,11 @@ void IRAM_ATTR InterrupDESL(){
     minGravacaoFs = 0;
 
     atualizaSaidaSS(byPass,   0);
-    atualizaSaidaSS(hora,     0);
-    atualizaSaidaSS(antHor,   0);
     atualizaSaidaSS(triac,    0);
     atualizaSaidaSS(buzzer,   0);
+    atualizaSaidaSS(hora,     0);
+    atualizaSaidaSS(antHor,   0);
+    
     reabOp  = millis();
   }
 }
@@ -2070,7 +2074,7 @@ void IRAM_ATTR InterrupDESL(){
 ====================================================================================*/
 void IRAM_ATTR InterrupREVERT(){
   if(!StGravaFlah){
-    if(!StatusLiga && !habCallDB && statusSeguranca && !StGravaFlah && millis() - reabOp >= 1300)  {
+    if(!StatusLiga && !habCallDB && statusSeguranca && !StGravaFlah && millis() - reabOp >= 1300 && !V_baixaDetectada)  {
       StatusRevert = true;
       statuDesl    = false;
       StatusLiga   = false;
@@ -2079,7 +2083,7 @@ void IRAM_ATTR InterrupREVERT(){
     }
     else StatusRevert = false;
 
-    if(StatusRevert && statusSeguranca && tempoinicializacao > 8000 && !StGravaFlah){
+    if(StatusRevert && statusSeguranca && tempoinicializacao > 8000 && !StGravaFlah ){
       atualizaSaidaSS(antHor,   1);
   
       finalRamp = millis();
@@ -2101,8 +2105,8 @@ void IRAM_ATTR InterrupEMERG(){
   fRamp = 1;
   minGravacaoFs = 0;
 
-  V_baixaDetectada = false;
-  V_extBaixaDetectada = false;
+  //V_baixaDetectada = false;
+  //V_extBaixaDetectada = false;
   I_altaDetectada = false;
   I_muitoAltaDetectada = false;   
   auxCont = 0;
@@ -2314,8 +2318,8 @@ void libMemorisFS(){
         FUNÇÃO DE DESLIGAMENTO AUTOMÁTICO DO MONTOR EM CASO DE CORRENTE MUITO ALTA APÓS 15s    
 ======================================================================================================*/
 void turnOffHHCurrent(){
-  V_baixaDetectada = false;
-  V_extBaixaDetectada = false;
+ // V_baixaDetectada = false;
+  //V_extBaixaDetectada = false;
   I_altaDetectada = false;
   I_muitoAltaDetectada = false;
   condGravaEprom  =   true;
@@ -2329,10 +2333,11 @@ void turnOffHHCurrent(){
   statuDesl       =   true; 
 
   atualizaSaidaSS(byPass,   0);
+  atualizaSaidaSS(triac,    0);
+  delay(10);
+  atualizaSaidaSS(buzzer,   0);
   atualizaSaidaSS(hora,     0);
   atualizaSaidaSS(antHor,   0);
-  atualizaSaidaSS(triac,    0);
-  atualizaSaidaSS(buzzer,   0);
   auxCont = 0;
 
   if(confLinha < linha && !StGravaFlah){
