@@ -54,7 +54,7 @@ OBSERVAÇÕES PARA CPRRETO FUNCIONAMENTO
 #define btEmegencia              23   //Entrada digital do botão de emergência
 #define OE                       26 
 
-#define TEMP_LUBRIFICA           800 //Tempo para librificação da máquina em horas 
+#define TEMP_LUBRIFICA           100 //Tempo para librificação da máquina em horas 
 
 #define WATCHDOG_TIMEOUT 2000 // Alterado para 3 segundos
 
@@ -371,14 +371,14 @@ void setup(){
   // ----------------------------- VERIFICA CASO A MÁQUINA NECESSIDE DE LUBRIFICAÇÃO -----------------------------------------------
 
   if      (horas >= TEMP_LUBRIFICA && horas < TEMP_LUBRIFICA +2 && contLub == 0) {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 2 && horas < (TEMP_LUBRIFICA * 2) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 3 && horas < (TEMP_LUBRIFICA * 3) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 4 && horas < (TEMP_LUBRIFICA * 4) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 5 && horas < (TEMP_LUBRIFICA * 5) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 6 && horas < (TEMP_LUBRIFICA * 6) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 7 && horas < (TEMP_LUBRIFICA * 7) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 8 && horas < (TEMP_LUBRIFICA * 8) + 2)      {habLunbrificacao = true; timeMsgLubrif = millis();}
-  else if (horas >= TEMP_LUBRIFICA * 9 && horas < (TEMP_LUBRIFICA * 9) + 2)      {habLunbrificacao = true; contLub = 1; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 2 && horas < (TEMP_LUBRIFICA * 2) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 3 && horas < (TEMP_LUBRIFICA * 3) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 4 && horas < (TEMP_LUBRIFICA * 4) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 5 && horas < (TEMP_LUBRIFICA * 5) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 6 && horas < (TEMP_LUBRIFICA * 6) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 7 && horas < (TEMP_LUBRIFICA * 7) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 8 && horas < (TEMP_LUBRIFICA * 8) + 1)      {habLunbrificacao = true; timeMsgLubrif = millis();}
+  else if (horas >= TEMP_LUBRIFICA * 9 && horas < (TEMP_LUBRIFICA * 9) + 1)      {habLunbrificacao = true; contLub = 1; timeMsgLubrif = millis();}
   else if (horas >= 2 && contLub == 1 )                                          {habLunbrificacao = true; contLub = 0; timeMsgLubrif = millis();}
 
   if(digitalRead(btEmegencia)) StatusEmerg = true;
@@ -529,7 +529,7 @@ void loop() {
       
     }
       //CASO PERMANEÇA POR MAIS DE 15s COM CORRENTE ALTA O EQUIPAMENTO SE DESLIGA SOZINHO
-      if (auxCont*timeBeep*2 >= tempTurnOff*1000 ) turnOffHHCurrent(); 
+      if (auxCont*timeBeep*2 >= tempTurnOff*300 ) turnOffHHCurrent(); 
      
 
     //APÓS 3 SEGUNDO SEM DETECTAR CORENTE ALTA VOLTA TELA E DESLIGA BEEP
@@ -652,7 +652,7 @@ void calculaCorrente(){
   
   //Irms = 13;
   Irms = emon1.calcIrms(1480);        // Configura número de amostras para a corrente 
-  //if(nivelTensao) Irms = Irms / 2;
+  if(nivelTensao) Irms = (Irms / 2);
   
  //Serial.println(Irms );
   if(Irms < 1) Irms = Irms*0;         // Caso a corrente for menor que 1A desconsidera a corrente drenada 
@@ -756,7 +756,7 @@ void calculaTensaoRede_rms(){
   else if (firstAnTensao && !nivelTensao)
   {
     tensaoRMS = soma / 400;
-    tensaoRMS = (sqrt(tensaoRMS)) -36;
+    tensaoRMS = (sqrt(tensaoRMS)) -37;
     tensaoDaRede  = ((uint)tensaoRMS);
     Serial.println("Tensao 220");
   }
@@ -789,7 +789,7 @@ void calculaTensaoRede_rms(){
 void analisaTensaoRede(){
 
   // VERIFICA SUBTENSÃO PARA TENSÃO DE TRABALHO DE 220V
-  if(!nivelTensao && tensaoDaRede < 204){
+  if(!nivelTensao && tensaoDaRede < 189){
     contSubTensao++;
     Serial.println(contSubTensao);
 
@@ -800,13 +800,13 @@ void analisaTensaoRede(){
       analisPreArmaz();
     }
   }
-  if(!nivelTensao && tensaoDaRede >= 204 && !tempVBaixa) 
+  if(!nivelTensao && tensaoDaRede >= 189 && !tempVBaixa) 
   {
     tempSubtensao = millis();
     tempVBaixa  = true;
   }
 
-  if(!nivelTensao && tensaoDaRede >= 204 && millis() - tempSubtensao > 5000 )
+  if(!nivelTensao && tensaoDaRede >= 189 && millis() - tempSubtensao > 5000 )
   {
    contSubTensao = 0;
    V_baixaDetectada = false;
@@ -815,7 +815,7 @@ void analisaTensaoRede(){
   //-----------------------------------------------------------------------------
 
   // VERIFICA SUBTENSÃO PARA TENSÃO DE TRABALHO DE 127V
-  if(nivelTensao && tensaoDaRede < 118){
+  if(nivelTensao && tensaoDaRede < 110){
     contSubTensao++;
 
     if(contSubTensao >= 5 && !V_baixaDetectada){
@@ -826,14 +826,14 @@ void analisaTensaoRede(){
  //   montaDB(horas, minutos, Irms*10, tensaoDaRede+12);
      
     }
-  if(nivelTensao && tensaoDaRede >= 118 && !tempVBaixa)
+  if(nivelTensao && tensaoDaRede >= 110 && !tempVBaixa)
   {
     tempSubtensao = millis();
     tempVBaixa  = true;
   }
 
   }
-  if(nivelTensao && tensaoDaRede >= 118 && millis() - tempSubtensao > 5000) 
+  if(nivelTensao && tensaoDaRede >= 110 && millis() - tempSubtensao > 5000) 
   {
    contSubTensao = 0;
    V_baixaDetectada = false;
@@ -876,7 +876,7 @@ void analizeCorrenteMotor(){
   if(!nivelTensao && Irms >= 14){
     contExtSobreCorre++;
 
-    if(contExtSobreCorre >= 5 && !I_muitoAltaDetectada){
+    if(contExtSobreCorre >= 2 && !I_muitoAltaDetectada){
       //Armazenar no banco de cados 
       I_muitoAltaDetectada = true;
       analisPreArmaz();
